@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Memory+Planning Agent · ChatUI</title>
+<style>
+  :root { --bg:#0f1420; --panel:#171e2e; --panel2:#1f2a40; --txt:#e6edf6; --muted:#8ba0bd;
+          --accent:#4f8cff; --ok:#2ecc71; --warn:#f1c40f; --bad:#e74c3c; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,"Segoe UI",Roboto,"Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--txt); height:100vh; display:flex; }
+  .sidebar { width:340px; min-width:340px; background:var(--panel); border-right:1px solid #2a3450; display:flex; flex-direction:column; overflow:hidden; }
+  .sidebar h2 { font-size:14px; margin:14px 16px 8px; color:var(--muted); }
+  .memory-box { flex:1; overflow:auto; padding:0 12px 12px; }
+  .mem { background:var(--panel2); border-radius:8px; padding:8px 10px; margin-bottom:8px; font-size:13px; }
+  .mem .tag { display:inline-block; font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .mem .tag b { color:var(--accent); }
+  .mem.dull { opacity:.55; }
+  .main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .topbar { padding:12px 20px; border-bottom:1px solid #2a3450; font-size:15px; font-weight:600; }
+  .chat { flex:1; overflow:auto; padding:20px; display:flex; flex-direction:column; gap:12px; }
+  .msg { max-width:72%; padding:10px 14px; border-radius:12px; line-height:1.5; font-size:14px; white-space:pre-wrap; }
+  .msg.user { align-self:flex-end; background:var(--accent); color:#fff; }
+  .msg.agent { align-self:flex-start; background:var(--panel2); }
+  .loader { color:var(--muted); font-size:13px; }
+  .inputbar { display:flex; gap:10px; padding:14px 20px; border-top:1px solid #2a3450; }
+  .inputbar input { flex:1; background:var(--panel); border:1px solid #2a3450; color:var(--txt);
+                    border-radius:8px; padding:11px 14px; font-size:14px; outline:none; }
+  .inputbar input:focus { border-color:var(--accent); }
+  .inputbar button { background:var(--accent); color:#fff; border:none; border-radius:8px;
+                     padding:0 20px; font-size:14px; cursor:pointer; }
+  .inputbar button:disabled { opacity:.5; cursor:not-allowed; }
+  .checkbox { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
+  .task { background:var(--panel); border:1px solid #2a3450; border-radius:8px; padding:8px 12px; margin-bottom:8px; font-size:13px; }
+  .task .status { float:right; font-size:12px; }
+  .st-done { color:var(--ok);} .st-in_progress{color:var(--warn);} .st-blocked{color:var(--bad);} .st-pending{color:var(--muted);}
+  .task .children { margin-left:18px; margin-top:6px; }
+  ::-webkit-scrollbar{width:8px;} ::-webkit-scrollbar-thumb{background:#2a3450;border-radius:4px;}
+</style>
+</head>
+<body>
+  <aside class="sidebar">
+    <h2>记忆库</h2>
+    <div class="memory-box" id="memBox"></div>
+    <h2>任务进度</h2>
+    <div style="flex:1; overflow:auto; padding:0 12px 12px;" id="planBox">
+      <div class="loader">尚未执行规划</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">Memory + Planning Agent 演示</div>
+    <div class="chat" id="chat"></div>
+    <div class="inputbar">
+      <input id="input" placeholder="输入消息，例如：帮我规划学习 Agent 开发" />
+      <label class="checkbox"><input type="checkbox" id="planSwitch" /> 规划模式</label>
+      <button id="send">发送</button>
+    </div>
+  </main>
+
+<script>
+const $ = s => document.querySelector(s);
+const chat = $('#chat'), memBox = $('#memBox'), planBox = $('#planBox');
+
+function addMsg(role, text){
+  const d = document.createElement('div');
+  d.className = 'msg ' + (role==='user'?'user':'agent');
+  d.textContent = text || '(空)';
+  chat.appendChild(d); chat.scrollTop = chat.scrollHeight;
+  return d;
+}
+function setLoading(on){ $('#send').disabled = on; }
+
+async function refreshMemories(){
+  const r = await fetch('/memories?limit=50');
+  const data = await r.json();
+  memBox.innerHTML = '';
+  data.long_term.forEach(m => {
+    const tag = (m.metadata && (m.metadata.topic || m.metadata.kind || m.metadata.source)) || 'long';
+    const el = document.createElement('div');
+    el.className = 'mem';
+    el.innerHTML = `<div class="tag">长期 · <b>${esc(tag)}</b></div>${esc(m.content)}`;
+    memBox.appendChild(el);
+  });
+  data.short_term.forEach(m => {
+    const el = document.createElement('div');
+    el.className = 'mem dull';
+    el.innerHTML = `<div class="tag">短期</div>${esc(m.content)}`;
+    memBox.appendChild(el);
+  });
+}
+
+async function refreshPlan(){
+  const r = await fetch('/plan');
+  const p = await r.json();
+  if(!p || !p.root){ planBox.innerHTML = '<div class="loader">尚未执行规划</div>'; return; }
+  planBox.innerHTML = '<div class="task">目标：' + esc(p.goal || '') + '</div>';
+  planBox.appendChild(renderTask(p.root));
+}
+function renderTask(t){
+  const wrap = document.createElement('div'); wrap.className='task';
+  const st = t.status || 'pending';
+  wrap.innerHTML = `<span class="status st-${st}">${esc(st)}</span>${esc(t.title)}
+    ${t.result?'<p style="margin:6px 0 0;color:var(--muted)">'+esc(t.result.slice(0,120))+'</p>':''}`;
+  if(t.subtasks && t.subtasks.length){
+    const kids = document.createElement('div'); kids.className='children';
+    t.subtasks.forEach(s => kids.appendChild(renderTask(s)));
+    wrap.appendChild(kids);
+  }
+  return wrap;
+}
+function esc(s){ return (s||'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function send(){
+  const txt = $('#input').value.trim();
+  if(!txt) return;
+  $('#input').value = '';
+  addMsg('user', txt);
+  const loader = addMsg('agent', ''); // placeholder for thinking
+  setLoading(true);
+  try{
+    const r = await fetch('/chat', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ message: txt, with_planning: $('#planSwitch').checked })
+    });
+    const data = await r.json();
+    loader.textContent = data.answer || '(无输出)';
+  }catch(e){ loader.textContent = '请求失败: ' + e; }
+  setLoading(false);
+  refreshMemories(); refreshPlan();
+}
+
+$('#send').onclick = send;
+$('#input').addEventListener('keydown', e => { if(e.key==='Enter') send(); });
+refreshMemories(); refreshPlan();
+</script>
+</body>
+</html>

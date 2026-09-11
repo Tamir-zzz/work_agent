@@ -1,0 +1,18 @@
+# LLM / Embedding 客户端 (OpenAI 兼容，也可用国内厂商兼容接口)
+openai>=1.30.0
+
+# 后端 API (SSE 流式) + ChatUI
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+sse-starlette>=2.0.0
+
+# Streamlit ChatUI（纯 Streamlit 单服务，底层 SSE 推送）
+streamlit>=1.33.0
+
+# 配置与校验 (需要 Python 3.10+)
+pydantic>=2.6.0
+pydantic-settings>=2.2.0
+python-dotenv>=1.0.0
+
+# 工具链 (可选)
+requests>=2.31.0
