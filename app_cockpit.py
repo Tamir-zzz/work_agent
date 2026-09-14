@@ -13,19 +13,32 @@ import streamlit as st
 from cockpit import CockpitController
 from cockpit.state import VehicleState
 from core.llm import get_llm
+from langgraph_flow import LangGraphCockpit
 from memory.manager import MemoryManager
 
 st.set_page_config(page_title="座舱 Agent 演示", page_icon="🚗", layout="wide")
 
-
-def get_controller() -> CockpitController:
-    """进程级单例，保持车况状态跨会话连续。"""
-    if "controller" not in st.session_state:
-        st.session_state["controller"] = CockpitController(get_llm(), memory=MemoryManager())
-    return st.session_state["controller"]
+_shared_state = VehicleState()
+_shared_mem = MemoryManager()
 
 
-controller = get_controller()
+def get_controllers() -> dict:
+    """进程级单例，保持车况/记忆跨会话连续；两个编排引擎共享同一车况与记忆池。"""
+    if "controllers" not in st.session_state:
+        st.session_state["controllers"] = {
+            "react": CockpitController(get_llm(), state=_shared_state, memory=_shared_mem),
+            "lg": LangGraphCockpit(state=_shared_state, memory=_shared_mem),
+        }
+    return st.session_state["controllers"]
+
+
+controllers = get_controllers()
+engine = st.sidebar.radio(
+    "编排引擎", ["自研 ReAct", "LangGraph"],
+    index=0,
+    help="自研 ReAct 为手写 handle 流程；LangGraph 用图式状态机 + interrupt() 实现受控指令二次确认，安全门逻辑复用。",
+)
+controller = controllers["lg" if engine == "LangGraph" else "react"]
 
 # ---------- 侧边栏：车况 + 控制 ----------
 with st.sidebar:
@@ -33,8 +46,10 @@ with st.sidebar:
     auto_confirm = st.toggle("自动确认受控指令(演示遮罩)", value=False,
                              help="开启后 controlled 指令自动执行，演示用；真实场景建议关闭")
     if st.button("重置车辆状态 + 清空记忆"):
-        controller.state = VehicleState()
-        asyncio.run(controller.memory.clear())
+        fresh = VehicleState()
+        for ct in controllers.values():
+            ct.state = fresh
+        asyncio.run(_shared_mem.clear())
         st.session_state["history"] = []
         st.rerun()
     s = controller.state.snapshot()

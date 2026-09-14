@@ -14,6 +14,7 @@ import streamlit as st
 
 from core.agent import Agent
 from core.models import PlanContext, TaskNode, TaskStatus
+from langgraph_flow import LangGraphAgent
 from planner.planner import Planner
 from planner.reflector import Reflector
 from tools.builtin import build_default_registry
@@ -21,6 +22,8 @@ from tools.builtin import build_default_registry
 # ---- 进程级单例(演示足够；真实多用户需按会话隔离) ----
 _agent = Agent()
 _agent.tools = build_default_registry(_agent.memory)
+# "优化版"：图式编排 LangGraph Agent，与自研 ReAct 共享同一记忆池与工具表，便于单开关 A/B
+_lg_agent = LangGraphAgent(memory=_agent.memory, tools=_agent.tools)
 _planner = Planner(_agent.llm, memory=_agent.memory)
 _reflector = Reflector(_agent.llm, _agent.memory)
 
@@ -37,7 +40,7 @@ def _flatten(node: TaskNode) -> list[str]:
     return lines
 
 
-async def _plan_stream(goal: str, holder: dict[str, Any]):
+async def _plan_stream(goal: str, holder: dict[str, Any], agent):
     """规划模式流式生成：拆解 -> 逐个执行(流式) -> 反思沉淀，全程逐段产出文本。"""
     # 记住本次目标，使后续含糊提问("再规划一下")仍能召回本主题续接
     await _agent.memory.remember(f"用户目标: {goal}")
@@ -57,7 +60,7 @@ async def _plan_stream(goal: str, holder: dict[str, Any]):
         yield f"\n■ {task.title}\n"
         buf: list[str] = []
         task_ctx = PlanContext(current_task=task)
-        async for tok in _agent.run_stream(
+        async for tok in agent.run_stream(
             f"{task.title} {task.description}".strip(), plan=task_ctx
         ):
             buf.append(tok)
@@ -116,7 +119,7 @@ def render_plan() -> None:
 
 
 # ---------------- 主聊天区 ----------------
-def render_chat(plan_mode: bool) -> None:
+def render_chat(plan_mode: bool, cur_agent) -> None:
     if "messages" not in st.session_state:
         st.session_state["messages"] = []
 
@@ -135,9 +138,9 @@ def render_chat(plan_mode: bool) -> None:
     holder: dict[str, Any] = {}
     with st.chat_message("assistant"):
         gen = (
-            _plan_stream(prompt, holder)
+            _plan_stream(prompt, holder, cur_agent)
             if plan_mode
-            else _agent.run_stream(prompt)
+            else cur_agent.run_stream(prompt)
         )
         try:
             out = st.write_stream(gen)
@@ -154,6 +157,11 @@ def main() -> None:
 
     with st.sidebar:
         st.title("控制台")
+        engine = st.radio(
+            "编排引擎", ["自研 ReAct", "LangGraph"],
+            index=0,
+            help="自研 ReAct 为手写 while 循环；LangGraph 为图式状态机(recall→agent→act→remember)，业务逻辑可复用。",
+        )
         plan_mode = st.toggle("规划模式", value=False)
         if st.button("清空记忆", type="primary", use_container_width=True):
             _run(_agent.memory.clear())
@@ -164,7 +172,8 @@ def main() -> None:
         render_plan()
 
     st.title("Memory + Planning Agent")
-    render_chat(plan_mode)
+    cur_agent = _agent if engine == "自研 ReAct" else _lg_agent
+    render_chat(plan_mode, cur_agent)
 
 
 main()

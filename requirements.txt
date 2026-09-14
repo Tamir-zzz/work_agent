@@ -16,3 +16,7 @@ python-dotenv>=1.0.0
 
 # 工具链 (可选)
 requests>=2.31.0
+
+# LangGraph 编排(自研 ReAct 之外的"优化版"图式编排，二者可切换)
+langgraph>=1.2.0
+langchain-openai>=1.6.0
